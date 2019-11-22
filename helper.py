@@ -1,22 +1,20 @@
+import torch
 
 class TensorPrep():
 
 	@staticmethod
 	def attention_get_dims(attention):
-
 			
 		def wrapper(*args, **kwargs): 
 			"""
 					In
 								queries: [batch, heads, length_q, depth_k]
-								keys:    [batch, heads, length_q, depth_k]
+								keys:    [batch, heads, length_kv, depth_k]
 								values:  [batch, heads, length_kv, depth_v]
 
 					out
+						{'queries': {'length': , 'depth': }, 'keys': {'length': , 'depth': }, 'values': {'length': , 'depth': }}
 
-								queries: [batch * heads, length_q, depth_k]
-								keys:    [batch * heads, length_q, depth_k]
-								values:  [batch * heads, length_kv, depth_v]
 			"""
 
 			# get last 2 dimensions 
@@ -28,8 +26,9 @@ class TensorPrep():
 
 			# get keywords or replace
 			for k,x in kwargs.items(): 
-				tensors[k] = get_shape(x) if (type(x) == torch.Tensor)
+				if type(x) == torch.Tensor:
 
+					tensors[k] = get_shape(x) 
 
 
 			return attention(*args, **kwargs, dims = tensors)

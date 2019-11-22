@@ -1,48 +1,10 @@
 import torch
 from torch import nn
 from math import sqrt
+from helper import TensorPrep
 
 
 # TODO 1conv linear for q,vk
-
-class TensorPrep():
-
-	@staticmethod
-	def attention_get_dims(attention):
-
-			
-		def wrapper(*args, **kwargs): 
-			"""
-					In
-								queries: [batch, heads, length_q, depth_k]
-								keys:    [batch, heads, length_kv, depth_k]
-								values:  [batch, heads, length_kv, depth_v]
-
-					out
-
-								queries: [batch * heads, length_q, depth_k]
-								keys:    [batch * heads, length_kv, depth_k]
-								values:  [batch * heads, length_kv, depth_v]
-			"""
-
-			# get last 2 dimensions 
-			get_shape = lambda tensor : { "length": tensor.shape[-2], "depth":  tensor.shape[-1] } 
-
-			#create dictionary of vectors and their last 2 dimension 
-			names = ["queries", "keys", "values"]
-			tensors = {names.pop(0): get_shape(x) for x in args if (type(x) == torch.Tensor)}
-
-			# get keywords or replace
-			for k,x in kwargs.items(): 
-				if type(x) == torch.Tensor:
-
-					tensors[k] = get_shape(x) 
-
-
-			return attention(*args, **kwargs, dims = tensors)
-		
-		return wrapper
-
 
 class Attention(nn.Module): 
 
@@ -65,6 +27,9 @@ class Attention(nn.Module):
 				{'queries': {'length': , 'depth': }, 'keys': {'length': , 'depth': }, 'values': {'length': , 'depth': }}
 
 
+		output: 
+			[batch*heads, length_q,  depth_v]
+
 		"""
 
 		super().__init__()
@@ -72,7 +37,7 @@ class Attention(nn.Module):
 		self.softmax  = torch.nn.Softmax(dim=2)
 
 	@TensorPrep.attention_get_dims
-	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: bool = False, dims = None): 
+	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: bool = False, dims: dict = None): 
 
 		 
 
@@ -86,78 +51,118 @@ class Attention(nn.Module):
 
 		# [batch*heads, length_q,  depth_k] * [batch*heads, depth_k, length_kv]
 		scaled_result = torch.bmm(Q, K.transpose(2,1)) / shrinking_weight  # out : [batch*heads, length_q,  length_kv] 
-		v_filter = self.softmax(scaled_result)							  
-
-		# [batch*heads, length_q,  length_kv] * [batch*heads, length_kv, depth_v]
-		attention_results = torch.bmm(v_filter, V) 				 # out:   [batch*heads, length_q,  depth_v]
 
 		# if mask:
 		# 	# TODO mask 
 		# 	pass
 		
 		return attention_results
+		v_filter = self.softmax(scaled_result)							  
+
+		# [batch*heads, length_q,  length_kv] * [batch*heads, length_kv, depth_v]
+		attention_results = torch.bmm(v_filter, V) 				 # out:   [batch*heads, length_q,  depth_v]
+
+		# essentaily return the result of multiheaded attention with each head output (including across batches) concated in first dimension
+		return attention_results
+
+"""
+given d_model dimensional keys, linearlly project to d_k, d_k, d_v dimension (Q, K, V)
+ get Q K V from linearrly projected values of embeddings
+
+output d_v dimensional 
+
+concanted outputs + linear again
+
+d_k = d_model / h = 64
+T_q = length q
+
+depth_v = d_model /h  = 64
+h = 8
+d_model = 512
+"""
+
+class MultiHeadedAttention(Attention): 
+	"""
+
+	Arg/Input: 
+		previous_output: Output of previous sub_layer or batch of word embeddings initially
+	
+
+	Input shape
+		previous_output :  ( batch_size x sequence_size x embed_size )
 
 
+		d_model = input_size 
 
-def unit_test_attention(): 
-
-	att = Attention()
-
-
-	q = 2
-	k = 3
-	v = 5
-	kv = 4
-	N = 5
-	batch_size = 2
-
-	x_list = [torch.randn(batch_size, N, q, k), torch.randn(batch_size, N, kv, k), torch.randn(batch_size, N, kv, v)]
-
-	y = att(*x_list)
-
-	# print("y", att(keys=x_list[1], queries=x_list[0],values=x_list[2], mask=True))
-	print("y", y.shape )
-
-unit_test_attention()
+	"""
+    def __init__(self, input_size, num_heads, d_k, d_v):
+        # TODO set init for attention correctly 
+        Attention.__init__()
 
 
+		# Size of embeddings
+		d_model = input_size
 
-# class MultiHeadedAttention(Attention): 
-
-#     def __init__(self, input_size, num_heads, d_k, d_v):
-#         # TODO set init for attention correctly 
-#         Attention.__init__()
-
-#         # set size of keys/queries transformation so you get size d_k for each head
-#         output_size_qk = num_heads * d_k
-#         # set size of values transformation so you get size d_k for each head
-#         output_size_v  = num_heads * d_v
-
-#         self.linear_q = torch.nn.Linear(input_size, output_size_qk)
-#         self.linear_k = torch.nn.Linear(input_size, output_size_qk)
-#         self.linear_v = torch.nn.Linear(input_size, output_size_v)
+        # set size of keys/queries transformation so you get size d_k for each head
+        output_size_qk = num_heads * d_k
+        # set size of values transformation so you get size d_k for each head
+        output_size_v  = num_heads * d_v
 
 
-#     def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: bool): 
+		# Weights: d_model x depth_k 
+        self.linear_q = nn.Linear(d_model, output_size_qk)
+		# Weights: d_model x depth_k 
+        self.linear_k = nn.Linear(d_model, output_size_qk)
+		# Weights: d_model x depth_v 
+        self.linear_v = nn.Linear(d_model, output_size_v)
 
+		
+		# enough depth in order to split it up int Q,K,V
+		out_channels = output_size_qk + output_size_qk + output_size_v
+		self.conv1d = nn.Conv1d( in_channels= ? ,out_channels , kernel_size=(1,1))
 
+    def forward(self, previous_output: torch.Tensor , mask: bool = False): 
+		"""			
+		What is going on here: 
+			1. in: ( batch_size x sequence_size x embed_size )
+					embed_size == depth_model == d_model
+			2. projection through conv 
+				shape-> ( batch_size x sequence_size x  (depth_q *num_heads + depth_k*num_heads + depth_v*num_heads)   )
+					==  ( batch_size x sequence_size x  (depth_q  + depth_k+ depth_v)*num_heads)   )
 
-#         Q, K, V =  self.linear_q(queries), self.linear_k(keys), self.linear_v(values)
+			3. split into Q, V, C 
+				shape -> (Batch x seq x depth_q * num_heads) (Batch x seq x depth_k * num_heads) (Batch x seq x depth_v * num_heads)
+				where depth_k == depth_v is mandatory. As notation I might write this as d_kv 
+				In implementation its also true that depth_k == d_kv  
+			4. Split into num_head sequences of depth depth_q and depth_kv respectively 
+				shape -> (Batch x num_heads x seq x depth_q) (Batch x num_heads x seq x depth_kv) (Batch x num_heads x seq x depth_kv)
+				This now matched the input needed for our scaled dot product attention : [batch, heads, length_q, depth_k]
+			5. Input and do attention 
+				-> output shape = [batch*heads, length_q,  depth_v] == (batch*heads x  sequence  x  depth_v)
+			6. Concat heads
+				shape -> (batchx  sequence  x  depth_v*heads )
+			7. Linear transform at end  concat(headi..headn)*W_o 
+				densely connected. Where W_o shape = (h*depth_v x d_model)
+				operation = (batchx  sequence  x  depth_v*heads ) * (h*depth_v x d_model)
+				output shape -> (batchx  sequence  x   d_model)
+				== ( batch_size x sequence_size x embed_size )
+				== input size
+		""" 
+        Q, K, V =  self.linear_q(queries), self.linear_k(keys), self.linear_v(values)
 
-
-#         # Attention()  in parralell - inlcudes lineawr  already
-#         # make it go through single atttention
-#         Attention.forward(self, Q, K, V, mask)
+		
+	
+        Attention.forward(self, Q, K, V, mask)  # out: [batch*heads, length_q,  depth_v]
 		
 		
-#         # Attention()  in parralell - inlcudes lineawr  already
-#         # TODO concat
-#         # TODO other linear 
+        # Attention()  in parralell - inlcudes lineawr  already
+        # TODO concat
+        # TODO other linear 
 
 
-#         #TODO  add residual and norm
+        #TODO  add residual and norm
 		
-#         pass
+        pass
 
 # class FeedForward(nn.Module):
 
