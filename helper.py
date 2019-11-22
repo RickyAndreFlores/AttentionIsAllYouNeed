@@ -2,7 +2,9 @@ import torch
 from functools import wraps
 
 class TensorPrep():
-
+	
+	indent_lvl = 0
+	
 	@staticmethod
 	def attention_get_dims(attention):
 		
@@ -31,40 +33,41 @@ class TensorPrep():
 
 					tensors[k] = get_shape(x) 
 
-
 			return attention(*args, **kwargs, dims = tensors)
 		
 		return wrapper
 
-	@staticmethod
-	def show__tensor_sizes(func):
+	@classmethod
+	def show__tensor_sizes(cls, func):
 
 		@wraps(func)
 		def wrapper(*args, **kwargs): 
 
-			print("Input tensor sizes:")
+			indent =  "\t"*cls.indent_lvl
+			print("\n" + indent + "Input tensor sizes:")
+			cls.indent_lvl +=1
+
 			for ar in args:
 				if type(ar) == torch.Tensor:
-					print(ar.shape, ar.grad_fn) 
+					print(indent, ar.shape, ar.grad_fn) 
+
+			# run functions
 			result = func(*args, **kwargs)
 
 
-			print("output tensor sizes")
-			try:
+			cls.indent_lvl -=1
+			print(indent + "output tensor sizes")
+
+			if type(result) == torch.Tensor:
+				print(indent, result.shape, result.grad_fn)
+			elif type(result) == tuple:
 				for ar in result:
 					if type(ar) == torch.Tensor:
-						print(ar.shape, ar.grad_fn) 
-
-			except TypeError:
-				if type(result) == torch.Tensor:
-					print(result.shape, result.grad_fn)
+						print(indent, ar.shape, ar.grad_fn) 
 
 
+			print()
 			return result 
 		
 		return wrapper
-
-	def test(self): 
-
-		print("test worked")
 

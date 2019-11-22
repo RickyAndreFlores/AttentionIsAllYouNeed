@@ -25,7 +25,7 @@ def unit_test_attention():
 
 	return y
 
-unit_test_attention()
+# unit_test_attention()
 
 
 def unit_mult_attention(): 
