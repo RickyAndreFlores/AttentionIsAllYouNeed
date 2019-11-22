@@ -84,6 +84,8 @@ class MultiHeadedAttention(nn.Module):
 	
 		Input shape
 			previous_output :  ( batch_size x sequence_size x embed_size )
+		Output  shape
+			previous_output :  ( batch_size x sequence_size x embed_size )
 		"""
 
 		super().__init__()
@@ -108,6 +110,8 @@ class MultiHeadedAttention(nn.Module):
 
 		# ending linear transform 
 		self.final_linear = torch.nn.Linear(self.depth_v*self.num_heads, self.d_model )
+
+		self.norm = nn.LayerNorm(self.d_model)
 
 
 	@TensorPrep.show__tensor_sizes
@@ -144,6 +148,8 @@ class MultiHeadedAttention(nn.Module):
 				== input size
 		""" 
 
+		residual = previous_output
+
 		self.batch_size = previous_output.shape[0]
 		self.seq = previous_output.shape[1]
 
@@ -153,8 +159,6 @@ class MultiHeadedAttention(nn.Module):
 
 		# !D coblution proj_depth times to extract proj_depth featrures, then transpose to original dim order
 		projected_results = self.projection(prev_transpose).transpose(1,2) # out : ( batch_size x sequence_size x proj_depth )
-
-
 
 		# split in QKV along 3rd dimension == slice up filter results into 3 chunks
 		# out: (Batch x seq x depth_q*num_heads) ... (Batch x seq x depth_v*num_heads) 
@@ -177,64 +181,79 @@ class MultiHeadedAttention(nn.Module):
 		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
 		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
 		
+		add_norm = self.norm(residual + output)
 		
-		return output
+		return add_norm
 		
 		# TODO add dropout in appropriate locations
 		
 class FeedForward(nn.Module):
 
-	def __init__(self, in_channels, out_channels):
+	def __init__(self, d_model=512, hidden=2048):
 
 		super().__init__()
 
-		in_channels = d_model
 
-		self.position_wise_linear =  	 	(        
-			nn.Conv1d( in_channels, out_channels, kernel_size=1),
+		self.position_wise_linear = nn.Sequential(        
+			nn.Conv1d( d_model, hidden, kernel_size=1),
 			nn.ReLU(),
-			nn.Conv1d( out_channels, in_channels, kernel_size=1), 
-			nn.LayerNorm(in_channels)
+			nn.Conv1d( hidden, d_model, kernel_size=1), 
 		)
-		
 
+		self.norm = nn.LayerNorm(d_model)
+
+	@TensorPrep.show__tensor_sizes
 	def forward(self, multi_atten_results: torch.Tensor):
 		"""
 		input :   ( batch_size x sequence_size x d_model )
 		output:   ( batch_size x sequence_size x d_model )
 		"""
+		
+		residual = multi_atten_results
+
+		# output -> ( batch_size x d_model x sequence_size)
+		output = self.position_wise_linear(multi_atten_results.permute(0,2,1))
+
+		add_norm= self.norm(residual + output.permute(0,2,1))
+
+		return add_norm
 
 
+class Encoder(nn.Module): 
+
+	def __init__(self, num_words: int=2, N_layers: int=6, d_model:int = 512): 
+		super().__init__()
 
 
-		output = self.position_wise_linear(multi_atten_results.transpose())
+		self.word_embeddings = nn.Embedding(num_words, d_model)  
+		# TODO positional encodings
+		self.positional_encoding = nn.Embedding(num_words, d_model)  #map values to sin function in paper
 
 
-		# TODO add attention residual and norm 
+		layers = []
+		for _ in range(N_layers): 
+			layers.append(MultiHeadedAttention())
+			layers.append(FeedForward())
+
+		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
+		print(layers)
+		self.encoder_layers = nn.Sequential(*layers) 
+
+	@TensorPrep.show__tensor_sizes
+	def forward(self, input): 
+
+		output = self.encoder_layers(input)
+		
+		return output 
 
 
-		return
+# TODO positional encodings
+def positional_encodings():
+	pass
 
-# N = 6 # num layers in encoder 
 
-# class Encoder(FeedForward, MultiHeadedAttention): 
-
-#     def __init__(self): 
-#         FeedForward.__init__(self)
-#         MultiHeadedAttention.__init__(self)
-
-		# self.word_embeddings = nn.Embeddings(num_words, d_model = 512)  
-		# self.positional_encoding = nn.Embedding(num_embeddings, d_model = 512) do from pretrained (lambda function?)  
-
-#TODO  add residual and norm
-
-#     def forward(self): 
-		# sum embeddings + positional encoding
-#         outputs = MultiHeadedAttention.forward( )
-#         queries, keys = FeedForward()
-
-#         return queries, keys
-
+# TODO decoder
+# TODO mask
 # class Decoder(Encoder): 
 
 #     def __init__(self):

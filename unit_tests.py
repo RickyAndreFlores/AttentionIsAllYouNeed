@@ -1,5 +1,8 @@
 from Transformer import Attention
 from Transformer import MultiHeadedAttention
+from Transformer import FeedForward
+from Transformer import Encoder
+
 import torch
 
 	
@@ -38,4 +41,23 @@ def unit_mult_attention():
 
 	# print("result", y)
 
-unit_mult_attention()
+# unit_mult_attentions()
+
+
+def unit_feed_forward(): 
+
+	ff = FeedForward()
+ 
+	y = ff(previous)
+
+# unit_feed_forward()
+
+def unit_encoder(): 
+
+	en = Encoder()
+
+	emeddings = torch.randn(batch_size, seq, embedding_size)
+	
+	out = en(emeddings)
+
+unit_encoder()
