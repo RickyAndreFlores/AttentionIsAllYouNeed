@@ -31,7 +31,6 @@ class Attention(nn.Module):
 		"""
 
 		super().__init__()
-		
 		self.softmax  = nn.Softmax(dim=2)
 
 
@@ -155,13 +154,15 @@ class MultiHeadedAttention(nn.Module):
 		# !D coblution proj_depth times to extract proj_depth featrures, then transpose to original dim order
 		projected_results = self.projection(prev_transpose).transpose(1,2) # out : ( batch_size x sequence_size x proj_depth )
 
+
+
 		# split in QKV along 3rd dimension == slice up filter results into 3 chunks
-		# out: (Batch x seq x depth*num_heads) 
+		# out: (Batch x seq x depth_q*num_heads) ... (Batch x seq x depth_v*num_heads) 
 		qkv = torch.split(projected_results, [self.depth_q*self.num_heads, self.depth_k*self.num_heads, self.depth_v*self.num_heads], 2)
 
- 		# out : -> (Batch x num_heads x seq x depth_q)
-		split_heads = lambda unsplit: unsplit.contiguous().view(self.batch_size, self.num_heads, self.seq, -1)  
-
+ 		# in (Batch x seq x depth_q*num_heads) -> (Batch x seq x num_heads x depth_q) ->
+		# out : -> (Batch x num_heads x seq x depth_q)
+		split_heads = lambda unsplit: unsplit.contiguous().view(self.batch_size, self.seq, self.num_heads, -1).permute(0,2,1,3)
 		Q, K, V = split_heads(qkv[0]),  split_heads(qkv[1]),  split_heads(qkv[2])
 
 		att_results = self.scaled_dot_attention(Q, K, V)  # out: [batch*heads, length_q,  depth_v]
@@ -179,32 +180,40 @@ class MultiHeadedAttention(nn.Module):
 		
 		return output
 		
+		# TODO add dropout in appropriate locations
 		
+class FeedForward(nn.Module):
+
+	def __init__(self, in_channels, out_channels):
+
+		super().__init__()
+
+		in_channels = d_model
+
+		self.position_wise_linear =  	 	(        
+			nn.Conv1d( in_channels, out_channels, kernel_size=1),
+			nn.ReLU(),
+			nn.Conv1d( out_channels, in_channels, kernel_size=1), 
+			nn.LayerNorm(in_channels)
+		)
 		
-	
-#TODO  add residual and norm
-		
-# class FeedForward(nn.Module):
 
-#     def __init__(self, in_channels, out_channels):
-
-
-#         self.position_wise_linear = nn.Sequential(        
-#             nn.Conv1d( in_channels, out_channels, kernel_size=1),
-#             nn.Conv1d( in_channels, out_channels, kernel_size=1), 
-#             nn.LayerNorm()
-#         )
-		
-
-#     def forward(self, atten_results: torch.Tensor):
-
-#         output = self.position_wise_linear(atten_results)
+	def forward(self, multi_atten_results: torch.Tensor):
+		"""
+		input :   ( batch_size x sequence_size x d_model )
+		output:   ( batch_size x sequence_size x d_model )
+		"""
 
 
-#         # TODO add attention residual and norm 
 
 
-#         return
+		output = self.position_wise_linear(multi_atten_results.transpose())
+
+
+		# TODO add attention residual and norm 
+
+
+		return
 
 # N = 6 # num layers in encoder 
 
@@ -216,6 +225,8 @@ class MultiHeadedAttention(nn.Module):
 
 		# self.word_embeddings = nn.Embeddings(num_words, d_model = 512)  
 		# self.positional_encoding = nn.Embedding(num_embeddings, d_model = 512) do from pretrained (lambda function?)  
+
+#TODO  add residual and norm
 
 #     def forward(self): 
 		# sum embeddings + positional encoding
