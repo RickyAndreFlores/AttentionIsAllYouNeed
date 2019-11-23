@@ -4,7 +4,7 @@ from functools import wraps
 class TensorPrep():
 	
 	indent_lvl = 0
-	
+	one_pass = False
 	@staticmethod
 	def attention_get_dims(attention):
 		
@@ -43,27 +43,34 @@ class TensorPrep():
 		@wraps(func)
 		def wrapper(*args, **kwargs): 
 
-			indent =  "\t"*cls.indent_lvl
-			print("\n" + indent + "Input tensor sizes:")
-			cls.indent_lvl +=1
 
-			for ar in args:
-				if type(ar) == torch.Tensor:
-					print(indent, ar.shape, ar.grad_fn) 
+			if not cls.one_pass:
+				indent =  "\t"*cls.indent_lvl
+				print("\n" + indent + "Input tensor sizes:")
+				cls.indent_lvl +=1
+
+				for ar in args:
+					if type(ar) == torch.Tensor:
+						print(indent, ar.shape, ar.grad_fn) 
 
 			# run functions
 			result = func(*args, **kwargs)
 
 
-			cls.indent_lvl -=1
-			print(indent + "output tensor sizes")
+			if not cls.one_pass:
 
-			if type(result) == torch.Tensor:
-				print(indent, result.shape, result.grad_fn)
-			elif type(result) == tuple:
-				for ar in result:
-					if type(ar) == torch.Tensor:
-						print(indent, ar.shape, ar.grad_fn) 
+				cls.indent_lvl -=1
+				if cls.indent_lvl == 0:
+					cls.one_pass = True
+
+				print(indent + "output tensor sizes")
+
+				if type(result) == torch.Tensor:
+					print(indent, result.shape, result.grad_fn)
+				elif type(result) == tuple:
+					for ar in result:
+						if type(ar) == torch.Tensor:
+							print(indent, ar.shape, ar.grad_fn) 
 
 
 			print()

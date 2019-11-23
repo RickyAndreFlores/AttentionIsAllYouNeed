@@ -221,13 +221,8 @@ class FeedForward(nn.Module):
 
 class Encoder(nn.Module): 
 
-	def __init__(self, num_words: int=2, N_layers: int=6, d_model:int = 512): 
+	def __init__(self, N_layers: int=6): 
 		super().__init__()
-
-
-		self.word_embeddings = nn.Embedding(num_words, d_model)  
-		# TODO positional encodings
-		self.positional_encoding = nn.Embedding(num_words, d_model)  #map values to sin function in paper
 
 
 		layers = []
@@ -236,52 +231,141 @@ class Encoder(nn.Module):
 			layers.append(FeedForward())
 
 		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
-		print(layers)
 		self.encoder_layers = nn.Sequential(*layers) 
 
 	@TensorPrep.show__tensor_sizes
-	def forward(self, input): 
+	def forward(self, input_embedding: torch.Tensor): 
 
 		output = self.encoder_layers(input)
 		
 		return output 
 
 
-# TODO positional encodings
-def positional_encodings():
-	pass
+class positional_encodings(nn.Module):
+
+	def __init__(self, num_words: int, d_model: int = 512):
+		
+		super().__init__()
+
+		self.num_words = num_words
+		self.d_model = d_model
+
+		# generate table
+		positional_encoding_values: torch.FloatTensor = self.get_pos_values()
+
+		# make look up table
+		self.positional_encoding_lookup = nn.Embedding.from_pretrained(positional_encoding_values, freeze=True)
+
+	@TensorPrep.show__tensor_sizes
+	def forward(self, indexes: torch.LongTensor): 
+		"""
+
+		// from pytorch docs 
+		Input: (*), LongTensor of arbitrary shape containing the indices to extract
+
+		Output: (*, H) , where * is the input shape and H=embedding_dim
+
+
+		"""
+		return self.positional_encoding_lookup(indexes)
+
+	def get_pos_values(self): 
+		"""
+		out:(n_positions x d_model)
+			where each value in the even (2*i)   columns is encoded with it's respective PE_sin(row,col) value
+			where each value in the odds (2*i+1) columns is encoded with it's respective PE_cos(row,col) value
+
+		"""
+		
+		#shape (n_positions x d_model)
+		encodings: torch.float = torch.randn(self.num_words, self.d_model)
+
+		num_i = self.d_model // 2
+
+		# for every word position
+		for pos in range(self.num_words): 
+			# iterate through every 2 columns 
+			for i in range(num_i):
+				encodings[pos][2*i]     = self.pe_sin(pos, 2*i)   		# evens
+				encodings[pos][2*i + 1] = self.pe_cos(pos, 2*i + 1)		# odds
+
+			# if odd
+			if self.d_model % 2 == 1:
+				# get last collumn 
+				encodings[pos][-1]     = self.pe_sin(pos, num_i)
+
+		return encodings
+
+	def pe_sin(self, pos, col): 
+		# col = 2i = even col 
+		exp = col / self.d_model
+		return torch.sin(pos / torch.pow(torch.Tensor([10000.0]), exp))
+
+	def pe_cos(self, pos, col): 
+		# col = 2i + 1 = odd col 
+		exp = col / self.d_model
+		return torch.cos(pos / torch.pow(torch.Tensor([10000.0]), exp))
+
+
+
+
 
 
 # TODO decoder
 # TODO mask
-# class Decoder(Encoder): 
+class Decoder(nn.Module): 
 
-#     def __init__(self):
-#         super().__init__()
+	def __init__(self):
+		super().__init__()
 
-#     def forward(self): 
+	def forward(self): 
 
-#         masked_values = super().MultiHeadedAttention(Q, K, V, mask =true)
-#         encoded_q, encoded_K = Encoder.forward()
-
-#         out = super().MultiheadedAttention(encoded_K, encoded_q, masked_values)
-#         results = super().FeedForward(out)
+		# masked_values = MultiHeadedAttention(Q, K, V, mask =true)
 
 
+		# encoded_q, encoded_K = Encoder.forward()
 
-# class Transformer(Decoder):
+		# out = super().MultiheadedAttention(encoded_K, encoded_q, masked_values)
+		# results = super().FeedForward(out)
+		pass
 
-#     def __init__(self):
-#         super().__init__()
-#         self.get_probabilites = nn.Sequential( [ 
-#             nn.Linear(), 
-#             nn.Softmax()
-#         ])
 
-#     def forward(self): 
+# TODO finish transformer
+class Transformer(nn.Module):
 
-#         results = super().forward()
-#         output_prob = self.get_probabilites(results)
-		
-#         return output_prob
+	def __init__(self, d_model = 513, output_size=1):
+		super().__init__()
+
+		self.word_embeddings = nn.Embedding(num_words, d_model)  
+		# TODO positional encodings
+		self.positional_encoding = positional_encodings(num_words, d_model)  #map values to sin function in paper
+
+		self.encoder = Encoder()
+
+		self.decoder = Decoder()
+
+		# in:( batch_size x sequence_size x embed_size )
+		# out:( batch_size x sequence_size x output_size )
+		# softmax over sequence -- need to remember/recheck TODO
+		self.get_probabilites = nn.Sequential( [ 
+			nn.Linear(d_model, output_size), 
+			nn.Softmax(dim=1)
+		])
+
+	def forward(self, inputs): 
+
+		# TODO word look up 
+		# torch.LongTensor
+		indexes = input2idx(inputs)
+
+
+		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
+
+		encoder_output = self.encoder(input_embedding)
+
+
+
+		output_prob = self.get_probabilites(results)
+	
+		return output_prob
 		

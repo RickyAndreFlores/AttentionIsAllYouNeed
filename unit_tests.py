@@ -2,10 +2,10 @@ from Transformer import Attention
 from Transformer import MultiHeadedAttention
 from Transformer import FeedForward
 from Transformer import Encoder
+from Transformer import positional_encodings
 
 import torch
 
-	
 seq = 3
 batch_size = 2
 embedding_size:int = 512
@@ -60,4 +60,14 @@ def unit_encoder():
 	
 	out = en(emeddings)
 
-unit_encoder()
+# unit_encoder()
+
+
+def unit_pos_encoder():
+
+	em = positional_encodings(5, 11)
+
+
+	out = em( torch.LongTensor([1,2,3,4]) )
+	print(out)
+unit_pos_encoder()
