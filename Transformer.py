@@ -219,9 +219,23 @@ class FeedForward(nn.Module):
 		return add_norm
 
 
+# TODO integrate with decoder
 class Encoder(nn.Module): 
 
 	def __init__(self, N_layers: int=6): 
+	"""
+		Create N layers of encoder layer
+
+		Encoder layer consits of:
+			Sublayer 1: 
+				multiheaded attention 
+				residual add then norm
+			Sublayer 2: 
+				Positionwise feed forward 
+				residual add then norm
+
+
+	"""
 		super().__init__()
 
 
@@ -235,6 +249,11 @@ class Encoder(nn.Module):
 
 	@TensorPrep.show__tensor_sizes
 	def forward(self, input_embedding: torch.Tensor): 
+		"""
+		input :   ( batch_size x sequence_size x d_model )
+		output:   ( batch_size x sequence_size x d_model )
+
+		"""
 
 		output = self.encoder_layers(input)
 		
