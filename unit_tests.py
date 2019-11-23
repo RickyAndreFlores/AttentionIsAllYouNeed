@@ -1,10 +1,13 @@
-from Transformer import Attention
-from Transformer import MultiHeadedAttention
-from Transformer import FeedForward
-from Transformer import Encoder
-from Transformer import positional_encodings
+# from Transformer import Attention
+# from Transformer import MultiHeadedAttention
+# from Transformer import FeedForward
+# from Transformer import Encoder
+# from Transformer import positional_encodings
+# from Transformer import Masked_MultiHeadedAttention
 
 import torch
+
+
 
 seq = 3
 batch_size = 2
@@ -14,7 +17,13 @@ depth_q: int = 64
 depth_k: int = 64
 depth_v: int = 64
 
+
+
+
+import torch
+
 def unit_test_attention(): 
+	from Transformer import Attention
 
 	att = Attention()
 
@@ -32,6 +41,7 @@ def unit_test_attention():
 
 
 def unit_mult_attention(): 
+	from Transformer import MultiHeadedAttention
 
 	multi = MultiHeadedAttention()
 
@@ -45,6 +55,7 @@ def unit_mult_attention():
 
 
 def unit_feed_forward(): 
+	from Transformer import FeedForward
 
 	ff = FeedForward()
  
@@ -53,6 +64,7 @@ def unit_feed_forward():
 # unit_feed_forward()
 
 def unit_encoder(): 
+	from Transformer import Encoder
 
 	en = Encoder()
 
@@ -65,9 +77,25 @@ def unit_encoder():
 
 def unit_pos_encoder():
 
+	from Transformer import positional_encodings
+
 	em = positional_encodings(5, 11)
 
 
 	out = em( torch.LongTensor([1,2,3,4]) )
 	print(out)
-unit_pos_encoder()
+# unit_pos_encoder()
+
+
+def unit_masked(): 
+	from Transformer import Masked_MultiHeadedAttention
+
+	test = Masked_MultiHeadedAttention()
+	print("is nn.Module", isinstance(test, torch.nn.Module) )
+
+	previous = torch.randn(batch_size, seq, embedding_size)
+
+	y = test(previous)
+	
+
+unit_masked()
