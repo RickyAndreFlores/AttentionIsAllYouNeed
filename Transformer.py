@@ -35,8 +35,58 @@ class Attention(nn.Module):
 
 	@TensorInfo.show__tensor_sizes
 	@TensorPrep.attention_get_dims
-	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: bool = False, dims: dict = None): 
+	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: torch.BoolTensor = None, dims: dict = None): 
+		"""
+		Given Q, K, V calculated attention
+			[batch*heads, length_q,  depth_k] 
 
+
+		Theoretically:
+			- Q, K, V = shape : [all_outputs_across_batches_and_heads, sequence_length,  num_dims_in_learned_embedding] 
+			
+			lets focus on the 2D matrix of the last 2 dimensions ( sequence_length,  num_dims_in_learned_embedding )
+
+			- Each dimension in an embedding space is a measure a certain feautre or "meaning"
+			- since each row corresponds to a word, all rows concated correspond to entire sentence
+			- a collumn in matrix Q == a sentence's vector along a certain "meaning" dimension
+
+
+			- Q, K ,V = list of transformed word embeddedings 
+			- transformed embeddings = projection of original meaning onto new "meaning" space
+			- Thus transformed embeddings = projection of original meaning onto new "meaning" space
+				= list of learned meanings for each word 
+
+			- constant * Q*K_transpose =  
+					for each collumn in output (== for each word):
+						linear combination of the "meaning" vector_i of sentence(all words) in Query matrix
+						, using as weights each value of the "meaning" vector of word_i in Key matrix
+
+						== cross correlation of Key vector (multiple meanings :one word) of each word
+							and each "meaning" vector in Q for whole sentence ( one meaning: all words)
+
+					So essentially, each Key for a word (each row in K) learns the importance of each "meaning" or embedding dimension  
+					Meanwhile a collumn in Q learns a representation of entire sentence along a single "meaning" dimension
+
+					each collumnn in Q*K_transpose = 
+						a feature vector for entire sentence that represent a weighted sum of each "interpretation" of a sentence
+							where weights = a row in K = the "importance" of each meaning dimension
+							and "interpretation" of a sentence is the values of a sentence along an embedding/"meaning dimension
+						= cross correlation of a single learned "meanings" importance and each word in sentence 
+						= while looking how a sentence ranks across differnt properties,
+							meaure how high they rank on the certain combination of those properties that make up a different feature 
+
+
+					for each row i in Q*K_transpose
+						for each column j in QK_transpose
+							QK_t[i][j]= cross correlation of (learned "meanings" importance)_i= K[:]][j] and leanred_word_embedding_i = Q[:][i]  
+			
+			softmax(scaled_result) * V  =  
+				adds a non-linearlity 
+				that creates "filter" for the each sentence "interpretation" of V  
+
+			Mask:
+				Allows Q 
+		"""
 		 
 		Q = queries.reshape(-1,  dims['queries']['length'],  dims['queries']['depth'])  # [batch*heads, length_q,  depth_k] 
 		K = keys.reshape(   -1,  dims['keys']['length'],     dims['keys']['depth'])     # [batch*heads, length_kv,  depth_k] 
@@ -48,17 +98,20 @@ class Attention(nn.Module):
 		# # math.sqrt if not tensor
 		shrinking_weight = sqrt(dims['queries']['depth'])
 
-		# [batch*heads, length_q,  depth_k] * [batch*heads, depth_k, length_kv]
-		scaled_result = torch.bmm(Q, K.transpose(2,1)) / shrinking_weight 			 # out : [batch*heads, length_q,  length_kv] 
+		# [batch*heads, length_q,  depth_k] * [batch*heads, depth_k, length_kv] = [batch*heads, length_q,  length_kv] 
+		scaled_result = torch.bmm(Q, K.transpose(2,1)) / shrinking_weight 			 # out : [batch*heads, seq,  seq] 
 
-		# if mask:
-		# 	# TODO mask 
-		# 	pass
+		if mask != None:
+			# TODO mask 
+
+			pass
 		
+		# create a matix that is theortically (batch  x feature/extracted meaning x importance of each word by position)
 		v_filter = self.softmax(scaled_result)							  
 
 		# [batch*heads, length_q,  length_kv] * [batch*heads, length_kv, depth_v]
-		attention_results = torch.bmm(v_filter, V) 									 # out:   [batch*heads, length_q,  depth_v]
+		# ==  [batch*heads, seq,  seq] * [batch*heads, seq, depth_v]
+		attention_results = torch.bmm(v_filter, V) # out:   [batch*heads, length_q==seq,  depth_v]
 
 		# essentaily return the result of multiheaded attention with each head output (including across batches) concated in first dimension
 		return attention_results
@@ -95,6 +148,13 @@ class MultiHeadedAttention(nn.Module):
 
 		# linearly projection , self attention 
 		self.projection = nn.Conv1d( in_channels=self.d_model, out_channels= self.proj_depth , kernel_size=1)
+
+
+		# Same as 1x1 convolution (when input is transpose) OPTIONAL replacement for self.projection
+		self.linear_q = nn.Linear(self.d_model, depth_qk*num_heads)
+		self.linear_k = nn.Linear(self.d_model, depth_qk*num_heads)
+		self.linear_v = nn.Linear(self.d_model, depth_v*num_heads)
+
 
 		# scaled dot product attention
 		self.scaled_dot_attention = Attention()
@@ -163,7 +223,7 @@ class MultiHeadedAttention(nn.Module):
  			in: [batch*heads, sequence,  depth_v]
 
 			out:
-				 (batch x  sequence  x  depth_v*heads )
+				(batch x  sequence  x  depth_v*heads )
 		"""
 		# seperate heads from batches
 		sep_batches = att_results.view(self.batch_size, self.num_heads, self.seq, self.depth_v)
@@ -172,7 +232,7 @@ class MultiHeadedAttention(nn.Module):
 		# concat heads along last dimension (i.e keep sequences in tact) -> out: (batch x  sequence  x  depth_v*heads )
 		multi_att_concat = sep_batches.permute(0,2,1,3).contiguous().view(self.batch_size, self.seq, self.depth_v*self.num_heads)
 
-	def get_qkv(self, previous_output: torch.Tensor):
+	def get_qkv(self, previous_output: torch.Tensor, project_by_parts=False, encoder_output=None):
 		"""
 		In:
 			torch.float of size 
@@ -185,7 +245,12 @@ class MultiHeadedAttention(nn.Module):
 			(Batch x num_heads x seq x depth_v)		
 		
 		"""
-		projected_results = self.project(previous_output)
+
+		if project_by_parts == False:
+			projected_results = self.project(previous_output)
+
+		else: 
+			projected_results = self.project_by_parts_linear(previous_output, encoder_output)
 
 		Q, K , V =  self.split_qkv(projected_results)
 
@@ -213,6 +278,37 @@ class MultiHeadedAttention(nn.Module):
 
 		return projected_results
 
+	def project_by_parts_linear(previous_output, encoder_output=None): 
+		"""
+		Optional
+		Equivalent to covolution by 1x1xsequence_len convolution when previous_ouputes last 2 dimension are transposed
+		== equaivalent to self.project() 
+
+		In:
+			torch.float of size 
+			(batch_size x sequence_size x embed_size ) 
+
+		Out: 
+			( batch_size x sequence_size x proj_depth )
+
+		"""
+		
+		# allow for encoder input for decoder
+		if encoder_output == None: 
+			encoder_output = previous_output
+
+		self.batch_size = previous_output.shape[0]
+		self.seq = previous_output.shape[1]
+
+
+		Q_proj = self.linear_q(previous_output) # ( batch_size x sequence_size  x self.depth_qk*self.num_heads)
+		V_proj = self.linear_v(encoder_output) # ( batch_size x sequence_size  x self.depth_qk*self.num_heads)
+		K_proj = self.linear_k(encoder_output) # ( batch_size x sequence_size  x self.depth_v *self.num_heads)
+
+		projected_results = torch.cat([Q_proj,V_proj,K_proj], dim=2)  #( batch_size x sequence_size x proj_depth )
+
+		return projected_results
+
 	def split_qkv(projected_results): 
 		"""
 		In:
@@ -236,6 +332,7 @@ class MultiHeadedAttention(nn.Module):
 		Q, K, V = split_heads(qkv[0]),  split_heads(qkv[1]),  split_heads(qkv[2])
 
 		return Q, K, V
+
 
 
 class FeedForward(nn.Module):
@@ -305,10 +402,8 @@ class Encoder(nn.Module):
 		Go through stack of N decoder layers, given (input_embeddings + positional_encoding)
 		"""
 		
-		encoder_output = self.encoder_layers(input)
+		return self.encoder_layers(input)
  
-		return encoder_output
-
 
 class positional_encodings(nn.Module):
 
@@ -375,9 +470,75 @@ class positional_encodings(nn.Module):
 		exp = col / self.d_model
 		return torch.cos(pos / torch.pow(torch.Tensor([10000.0]), exp))
 
+class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
+# TODO mask
 
+	def __init__(self, encoder_output):
+		"""
+		Child class of MultiHeaded Attention
+
+		Does everything Multiheaded attention does takes in Encoder stack output for Q and K values
+		"""
+
+		super().__init__()
+		print(self.__class__)
+
+		
+		# ( batch_size x sequence_size x embed_size ) 
+		self.encoder_output = encoder_output
+
+	def forward(self, decoder_previous_output):
+		"""
+
+		Arg/Input:
+
+    	    previous_output: Output of previous sub_layer or batch of output embeddings initially  
+		Input shape
+
+        previous_output :  ( batch_size x sequence_size x embed_size ) 
+
+		"""
+		# ( batch_size x sequence_size x embed_size )
+		residual = decoder_previous_output
+
+		# Linear transfer both encoder results and previous steps result to get Q,K,V
+		# decoder_Q, _, _ 		= self.get_qkv(previous_output)
+		# _, encoder_K, encoder_V = self.get_qkv(self.encoder_output)
+		# Below avoids unnecessary calculation but less readable
+		Q, K, V - self.get_qkv(decoder_previous_output, project_by_parts=True, encoder_output = self.encoder_output)
+
+		att_results = self.scaled_dot_attention(decoder_Q, encoder_K, encoder_V)  # out: [batch*heads, length_q,  depth_v]
+
+		multi_att_concat = self.format_concat(att_results)
+
+		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
+		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
+		
+		add_norm = self.norm(residual + output)
+		
+		return add_norm
+
+
+	def project_by_parts_linear(previous_output): 
+		"""
+		Optional
+		Equivalent to covolution by 1x1xsequence_len convolution when previous_ouputes last 2 dimension are transposed
+		== equaivalent to self.project() 
+
+		"""
+
+		self.batch_size = previous_output.shape[0]
+		self.seq = previous_output.shape[1]
+
+
+		Q = self.linear_q(previous_output)
+		V = self.linear_v(previous_output) 
+		K = self.linear_k(previous_output)
+
+		return Q, K, V
+
+		
 class Masked_MultiHeadedAttention(MultiHeadedAttention): 
-
 
 	def __init__(self):
 		"""
@@ -404,51 +565,6 @@ class Masked_MultiHeadedAttention(MultiHeadedAttention):
 		MultiHeadedAttention.forward(self, input)
 		
 
-class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
-
-	def __init__(self, encoder_output):
-		"""
-		Child class of MultiHeaded Attention
-
-		Does everything Multiheaded attention does takes in Encoder stack output for Q and K values
-		"""
-		super().__init__()
-		print(self.__class__)
-
-		# ( batch_size x sequence_size x embed_size ) 
-		self.encoder_output = encoder_output
-
-
-	def forward(self, decoder_previous_output):
-		"""
-
-		Arg/Input:
-
-    	    previous_output: Output of previous sub_layer or batch of output embeddings initially  
-		Input shape
-
-        previous_output :  ( batch_size x sequence_size x embed_size ) 
-
-		"""
-		# ( batch_size x sequence_size x embed_size )
-		residual = decoder_previous_output
-
-		# Linear transfer both encoder results and previous steps result to get Q,K,V
-		decoder_Q, _, _ 		= self.get_qkv(previous_output)
-		_, encoder_K, encoder_V = self.get_qkv(self.encoder_output)
-
-		att_results = self.scaled_dot_attention(decoder_Q, encoder_K, encoder_V)  # out: [batch*heads, length_q,  depth_v]
-
-		multi_att_concat = self.format_concat(att_results)
-
-		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
-		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
-		
-		add_norm = self.norm(residual + output)
-		
-		return add_norm
-
-
 
 # TODO decoder
 # TODO mask
@@ -467,12 +583,11 @@ class Decoder(nn.Module):
 		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
 		self.decoder_layers = nn.Sequential(*layers) 
 
-	def forward(self, prev_outputs): 
+	def forward(self, output_pred_embeds: torch.Tensor): 
 
-		outputs =  self.decoder_layers(prev_outputs)
+		decoder_stack_output =  self.decoder_layers(output_pred_embeds)
 
-
-		return outputs
+		return decoder_stack_output
 
 
 # TODO finish transformer
@@ -503,31 +618,18 @@ class Transformer(nn.Module):
 		input_embeddings =  self.get_input_encoder_embed(sequence_input)
 		encoder_output = Encoder(input_embeddings)
 
-		# Initialize encoder with output of stack 
+		# Initialize encoder with output of encoder layers stack 
 		self.decoder = Decoder(encoder_output) 
 
 
 		self.get_probabilites = nn.Sequential( [ 
 			# in:( batch_size x sequence_size x embed_size )
-			# out:( batch_size x sequence_size x output_size )
-			nn.Linear(d_model, self.seq_len), 
+			# out:( batch_size x sequence_size x 1 )
+			nn.Linear(d_model, 1), 
 			# softmax over sequence -- need to remember/recheck TODO
 			nn.Softmax(dim=1) 
 			])
 		
-		
-	def get_output_QK(self, sequence_input): 
-		"""
-		in:
-			sequence of words
-
-		out:
-			Q, V transformed from output of encoder layers stack
-			size = ( batch_size x sequence_size x d_model )
-
-		"""
-		combined_output = self.encoder_forward(sequence_input)
-
 		
 		
 	def forward(self, prev_outputs): 
@@ -541,7 +643,7 @@ class Transformer(nn.Module):
 		# encoder_Q, encoder_K = self.get_encoder_output()
 
 		# Takes in encoder outputs to extract Q, K and prev_output = (output_embeddings + positional)
-		output_probabilities = self.decoder(prev_outputs, encoder_output)
+		decoder_output = self.decoder(prev_outputs, encoder_output)
 
 		# TODO might integrate this function with decoder
 		output_embeddings = self.get_output_embed(output_probabilities)
