@@ -64,17 +64,14 @@ class Attention(nn.Module):
 		return attention_results
 
 	
-
-
 class MultiHeadedAttention(nn.Module): 
 
-	def __init__(self, embedding_size:int = 512, num_heads:int = 6, depth_q: int = 64, depth_k: int = 64, depth_v: int = 64):
+	def __init__(self, embedding_size:int = 512, num_heads:int = 6, depth_qk: int = 64, depth_v: int = 64):
 		"""
 		Init Args: 
 			embedding_size 
 			num_heads
-			depth_q
-			depth_k
+			depth_qk = depth_q =depth_k
 			depth_v
 
 		Forward Arg/Input: 
@@ -88,17 +85,13 @@ class MultiHeadedAttention(nn.Module):
 
 		super().__init__()
 
-		self.d_model =			 embedding_size 		# Size of embeddings
+		self.d_model =			embedding_size 		# Size of embeddings
 		self.num_heads = 		num_heads
-		self.depth_q = 			depth_q
-		self.depth_k = 			depth_k
+		self.depth_qk = 		depth_qk
 		self.depth_v = 		    depth_v
-
-		# Size of embeddings
-		self.d_model = embedding_size
-		
+	
 		# size of output of linear projection
-		self.proj_depth = (depth_q + depth_k + depth_v)*num_heads
+		self.proj_depth = (depth_qk + depth_qk + depth_v)*num_heads
 
 		# linearly projection , self attention 
 		self.projection = nn.Conv1d( in_channels=self.d_model, out_channels= self.proj_depth , kernel_size=1)
@@ -124,13 +117,14 @@ class MultiHeadedAttention(nn.Module):
 		What is going on here: 
 			1. in: ( batch_size x sequence_size x embed_size )
 					embed_size == depth_model == d_model
-			2. projection through conv 
-				shape-> ( batch_size x sequence_size x  (depth_q *num_heads + depth_k*num_heads + depth_v*num_heads)   )
+			2. projection throughs number of filters * 1x1xsequence convs
+				transpose for pytorch> convoltion -> transpose -> 
+					essentially a fully connected layer across the entire embedding, for each word in sequence
+				out shape-> ( batch_size x sequence_size x  (depth_q *num_heads + depth_k*num_heads + depth_v*num_heads)   )
 					==  ( batch_size x sequence_size x  (depth_q  + depth_k+ depth_v)*num_heads)   )
-			3. split into Q, V, C 
+			3. split into (projected/transformed) Q, V, C 
 				shape -> (Batch x seq x depth_q * num_heads) (Batch x seq x depth_k * num_heads) (Batch x seq x depth_v * num_heads)
 				where depth_k == depth_q is mandatory. As notation I might write this as d_qk 
-				although in implementation its also true that depth_qk == d_v  
 			4. Split into num_head sequences of depth depth_q and depth_kv respectively 
 				shape -> (Batch x num_heads x seq x depth_q) (Batch x num_heads x seq x depth_kv) (Batch x num_heads x seq x depth_kv)
 				This now matched the input needed for our scaled dot product attention : [batch, heads, length_q, depth_k]
@@ -146,7 +140,66 @@ class MultiHeadedAttention(nn.Module):
 				== input size
 		""" 
 
+		# ( batch_size x sequence_size x embed_size )
 		residual = previous_output
+
+		Q, K, V = self.get_qkv(previous_output)
+
+		att_results = self.scaled_dot_attention(Q, K, V)  # out: [batch*heads, length_q,  depth_v]
+
+		multi_att_concat = self.format_concat(att_results)
+
+		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
+		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
+		
+		add_norm = self.norm(residual + output)
+		
+		return add_norm
+		
+		# TODO add dropout in appropriate locations
+	
+	def format_concat(att_results: torch.Tensor):
+		"""
+ 			in: [batch*heads, sequence,  depth_v]
+
+			out:
+				 (batch x  sequence  x  depth_v*heads )
+		"""
+		# seperate heads from batches
+		sep_batches = att_results.view(self.batch_size, self.num_heads, self.seq, self.depth_v)
+
+		# switch collumns to keep order for merge
+		# concat heads along last dimension (i.e keep sequences in tact) -> out: (batch x  sequence  x  depth_v*heads )
+		multi_att_concat = sep_batches.permute(0,2,1,3).contiguous().view(self.batch_size, self.seq, self.depth_v*self.num_heads)
+
+	def get_qkv(self, previous_output: torch.Tensor):
+		"""
+		In:
+			torch.float of size 
+			(batch_size x sequence_size x embed_size ) 
+
+		Out: 
+			3 tensors of size 
+			(Batch x num_heads x seq x depth_qk) 
+			(Batch x num_heads x seq x depth_qk) 
+			(Batch x num_heads x seq x depth_v)		
+		
+		"""
+		projected_results = self.project(previous_output)
+
+		Q, K , V =  self.split_qkv(projected_results)
+
+		return Q, K, V
+
+	def project(previous_output: torch.Tensor):
+		"""
+		In:
+			torch.float of size 
+			(batch_size x sequence_size x embed_size ) 
+
+		Out: 
+			( batch_size x sequence_size x proj_depth )
+		"""
 
 		self.batch_size = previous_output.shape[0]
 		self.seq = previous_output.shape[1]
@@ -158,33 +211,33 @@ class MultiHeadedAttention(nn.Module):
 		# !D coblution proj_depth times to extract proj_depth featrures, then transpose to original dim order
 		projected_results = self.projection(prev_transpose).transpose(1,2) # out : ( batch_size x sequence_size x proj_depth )
 
-		# split in QKV along 3rd dimension == slice up filter results into 3 chunks
+		return projected_results
+
+	def split_qkv(projected_results): 
+		"""
+		In:
+			torch.float of size ( batch_size x sequence_size x proj_depth= (depth_qk + depth_qk + depth_v)*num_heads ) 
+
+		Out: 
+			3 tensors of size 
+			(Batch x num_heads x seq x depth_qk) (Batch x num_heads x seq x depth_qk) (Batch x num_heads x seq x depth_v)
+		"""
+		
+		self.batch_size = previous_output.shape[0]
+		self.seq = previous_output.shape[1]
+
+		# split in QKV along 3rd dimension == slice up filters results into 3 chunks == split across channels to extract tuple  (q, k, v)
 		# out: (Batch x seq x depth_q*num_heads) ... (Batch x seq x depth_v*num_heads) 
-		qkv = torch.split(projected_results, [self.depth_q*self.num_heads, self.depth_k*self.num_heads, self.depth_v*self.num_heads], 2)
+		qkv = torch.split(projected_results, [self.depth_qk*self.num_heads, self.depth_qk*self.num_heads, self.depth_v*self.num_heads], 2)
 
  		# in (Batch x seq x depth_q*num_heads) -> (Batch x seq x num_heads x depth_q) ->
 		# out : -> (Batch x num_heads x seq x depth_q)
 		split_heads = lambda unsplit: unsplit.contiguous().view(self.batch_size, self.seq, self.num_heads, -1).permute(0,2,1,3)
 		Q, K, V = split_heads(qkv[0]),  split_heads(qkv[1]),  split_heads(qkv[2])
 
-		att_results = self.scaled_dot_attention(Q, K, V)  # out: [batch*heads, length_q,  depth_v]
+		return Q, K, V
 
-		# seperate heads from batches
-		sep_batches = att_results.view(self.batch_size, self.num_heads, self.seq, self.depth_v)
 
-		# switch collumns to keep order for merge
-		# concat heads along last dimension (i.e keep sequences in tact) -> out: (batch x  sequence  x  depth_v*heads )
-		multi_att_concat = sep_batches.permute(0,2,1,3).contiguous().view(self.batch_size, self.seq, self.depth_v*self.num_heads)
-
-		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
-		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
-		
-		add_norm = self.norm(residual + output)
-		
-		return add_norm
-		
-		# TODO add dropout in appropriate locations
-		
 class FeedForward(nn.Module):
 
 	def __init__(self, d_model=512, hidden=2048):
@@ -352,8 +405,7 @@ class Masked_MultiHeadedAttention(MultiHeadedAttention):
 
 class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
 
-
-	def __init__(self):
+	def __init__(self,  encoder_Q, encoder_K):
 		"""
 		Child class of MultiHeaded Attention
 
@@ -362,9 +414,12 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 		super().__init__()
 		print(self.__class__)
 
-	def forward(self, input):
+		self.encoder_Q = encoder_Q
+		self.decoder_K = encoder_K
+
+
+	def forward(self, decoder_previous_output):
 		"""
-		TODO -> implement mask 
 
 		Arg/Input:
 
@@ -374,49 +429,73 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
         previous_output :  ( batch_size x sequence_size x embed_size ) 
 
 		"""
-		MultiHeadedAttention.forward(self, input)
+		# ( batch_size x sequence_size x embed_size )
+		residual = decoder_previous_output
 
-	def get_encoder_qk(self):
+		_, _, V = self.get_qkv(previous_output)
 
-		if self.encoder_Q =
+		att_results = self.scaled_dot_attention(self.encoder_Q, self.decoder_K, V)  # out: [batch*heads, length_q,  depth_v]
+
+		multi_att_concat = self.format_concat(att_results)
+
+		# linear transform of contact that brings values back to d_model dimensions ==  embed_size
+		output = self.final_linear(multi_att_concat)  #out: ( batch_size x sequence_size x d_model )
+		
+		add_norm = self.norm(residual + output)
+		
+		return add_norm
+
 
 
 # TODO decoder
 # TODO mask
 class Decoder(nn.Module): 
 
-	def __init__(self, N_layers: int = 6):
+	def __init__(self, encoder_Q, encoder_K, N_layers: int = 6):
 		super().__init__()
+
 
 		layers = []
 		for _ in range(N_layers): 
 			layers.append(Masked_MultiHeadedAttention())  #TODO masked
-			layers.append(Decoder_MultiHeadedAttention())  #TODO encoder input
+			layers.append(Decoder_MultiHeadedAttention(encoder_Q, encoder_K)) 
 			layers.append(FeedForward())
 
 		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
 		self.decoder_layers = nn.Sequential(*layers) 
 
-		self.encoder_Q = None
-		self.decoder_K = None
 
 
-	def forward(self, prev_outputs, encoder_output): 
+	def forward(self, prev_outputs): 
 
-	
-		pass
+		outputs =  self.decoder_layers(prev_outputs)
+
+
+		return outputs
 
 
 # TODO finish transformer
 class Transformer(nn.Module):
 
-	def __init__(self, d_model = 513, output_size=1, sequence_input):
+	def __init__(self,  sequence_input,
+						embedding_size:int = 512, 
+						num_heads:int = 6, 
+						depth_qk: int = 64, 
+						depth_v: int = 64):
+		
 		super().__init__()
 
+		# TODO see what values a needed where / adjust or remove initialize defautl values 
+		self.d_model =			embedding_size 		# Size of embeddings
+		self.num_heads = 		num_heads
+		self.depth_qk = 		depth_qk
+		self.depth_v = 		    depth_v
+
+		self.seq_len = len(sequence_input)
+
+		# Initiliaze embeddings and their look up table
 		self.word_embeddings = nn.Embedding(num_words, d_model)  
 		self.positional_encoding = positional_encodings(num_words, d_model)  #map values to sin function in paper
-
-
 
 		self.encoder = Encoder()
 		# Do a single pass through encoder stack 
@@ -428,7 +507,7 @@ class Transformer(nn.Module):
 		self.get_probabilites = nn.Sequential( [ 
 			# in:( batch_size x sequence_size x embed_size )
 			# out:( batch_size x sequence_size x output_size )
-			nn.Linear(d_model, output_size), 
+			nn.Linear(d_model, self.seq_len), 
 			# softmax over sequence -- need to remember/recheck TODO
 			nn.Softmax(dim=1) 
 			])
@@ -437,7 +516,6 @@ class Transformer(nn.Module):
 	def get_output_QK(self, sequence_input): 
 
 		combined_output = self.encoder_forward(sequence_input)
-
 
 	def encoder_forward(self, sequence_input):
 		"""
@@ -481,7 +559,11 @@ class Transformer(nn.Module):
 		"""
 		
 		# TODO word to index look up input2idx(input) for output_probs / other language 
-			
+
+		# shift max to right
+
+		decoder_input = self.get_
+
 		# torch.LongTensor
 		indexes: torch.LongTensor = input2idx(sequence_input)
 		# Add positional encoding information
@@ -493,6 +575,7 @@ class Transformer(nn.Module):
 		# Add positional encoding information
 		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
 		return input_embedding
+
 
 
 
