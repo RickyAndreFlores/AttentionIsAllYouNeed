@@ -19,7 +19,7 @@ class Attention(nn.Module):
 			queries: [batch, heads, length_q, depth_k] 
 			keys:    [batch, heads, length_kv, depth_k] 
 			values:  [batch, heads, length_kv, depth_v] 
-			mask:
+			mask: Torch.BoolTensor
 			dims: dictionary of  last 2 dimensions {tensor: {length: , depth: } , ... }
 				{'queries': {'length': , 'depth': }, 'keys': {'length': , 'depth': }, 'values': {'length': , 'depth': }}
 
@@ -35,10 +35,16 @@ class Attention(nn.Module):
 
 	@TensorInfo.show__tensor_sizes
 	@TensorPrep.attention_get_dims
-	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: torch.BoolTensor = None, dims: dict = None): 
+	def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask: torch.Tensor = None, dims: dict = None): 
 		"""
-		Given Q, K, V calculated attention
+		Given Q, K, V 
 			[batch*heads, length_q,  depth_k] 
+			[batch*heads, length_kv,  depth_k] 
+			[batch*heads, length_kv, depth_v] 
+		Returns 
+			[batch*heads, length_q==seq,  depth_v]
+
+			essentaily return the result of multiheaded attention with each head output (including across batches) concated in first dimension
 
 
 		Theoretically:
@@ -84,16 +90,16 @@ class Attention(nn.Module):
 				adds a non-linearlity 
 				that creates "filter" for the each sentence "interpretation" of V  
 
-			Mask:
-				Allows Q 
+			Mask and offset:
+				'This masking, combined with fact that the output embeddings are offset by one position, 
+				ensures that the predictions for position_i can depend only on the known outputs at positions less than i'
+
+				Helps predict next word based off input words and predicted words so far only
 		"""
 		 
 		Q = queries.reshape(-1,  dims['queries']['length'],  dims['queries']['depth'])  # [batch*heads, length_q,  depth_k] 
 		K = keys.reshape(   -1,  dims['keys']['length'],     dims['keys']['depth'])     # [batch*heads, length_kv,  depth_k] 
 		V = values.reshape( -1,  dims['values']['length'],   dims['values']['depth'])   # [batch*heads, length_kv, depth_v] 
-
-		# TODO make sure this is safe-
-		# print("see if unsafe", Q.grad_fn)
 
 		# # math.sqrt if not tensor
 		shrinking_weight = sqrt(dims['queries']['depth'])
@@ -102,18 +108,15 @@ class Attention(nn.Module):
 		scaled_result = torch.bmm(Q, K.transpose(2,1)) / shrinking_weight 			 # out : [batch*heads, seq,  seq] 
 
 		if mask != None:
-			# TODO mask 
+			scaled_result *= mask
 
-			pass
-		
 		# create a matix that is theortically (batch  x feature/extracted meaning x importance of each word by position)
 		v_filter = self.softmax(scaled_result)							  
 
 		# [batch*heads, length_q,  length_kv] * [batch*heads, length_kv, depth_v]
-		# ==  [batch*heads, seq,  seq] * [batch*heads, seq, depth_v]
-		attention_results = torch.bmm(v_filter, V) # out:   [batch*heads, length_q==seq,  depth_v]
+		# ==  [batch*heads, seq,  seq] * [batch*heads, seq, depth_v] =  [batch*heads, length_q==seq,  depth_v]
+		attention_results = torch.bmm(v_filter, V) 	
 
-		# essentaily return the result of multiheaded attention with each head output (including across batches) concated in first dimension
 		return attention_results
 
 	
@@ -155,7 +158,6 @@ class MultiHeadedAttention(nn.Module):
 		self.linear_k = nn.Linear(self.d_model, depth_qk*num_heads)
 		self.linear_v = nn.Linear(self.d_model, depth_v*num_heads)
 
-
 		# scaled dot product attention
 		self.scaled_dot_attention = Attention()
 
@@ -166,7 +168,7 @@ class MultiHeadedAttention(nn.Module):
 
 
 	@TensorInfo.show__tensor_sizes
-	def forward(self, previous_output: torch.Tensor , mask: bool = False): 
+	def forward(self, previous_output: torch.Tensor , mask: torch.Tensor = None): 
 		"""		
 		Arg/Input: 
 			previous_output: Output of previous sub_layer or batch of word embeddings initially
@@ -205,7 +207,7 @@ class MultiHeadedAttention(nn.Module):
 
 		Q, K, V = self.get_qkv(previous_output)
 
-		att_results = self.scaled_dot_attention(Q, K, V)  # out: [batch*heads, length_q,  depth_v]
+		att_results = self.scaled_dot_attention(Q, K, V, mask)  # out: [batch*heads, length_q,  depth_v]
 
 		multi_att_concat = self.format_concat(att_results)
 
@@ -573,6 +575,7 @@ class Decoder(nn.Module):
 	def __init__(self, encoder_output: torch.Tensor, N_layers: int = 6):
 		super().__init__()
 
+		self.encoder_output = encoder_output
 
 		layers = []
 		for _ in range(N_layers): 
