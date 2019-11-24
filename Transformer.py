@@ -305,8 +305,9 @@ class Encoder(nn.Module):
 		Go through stack of N decoder layers, given (input_embeddings + positional_encoding)
 		"""
 		
-		return 	self.encoder_layers(input)
+		encoder_output = self.encoder_layers(input)
  
+		return encoder_output
 
 
 class positional_encodings(nn.Module):
@@ -405,7 +406,7 @@ class Masked_MultiHeadedAttention(MultiHeadedAttention):
 
 class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
 
-	def __init__(self, encoder_K, encoder_V):
+	def __init__(self, encoder_output):
 		"""
 		Child class of MultiHeaded Attention
 
@@ -414,8 +415,8 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 		super().__init__()
 		print(self.__class__)
 
-		self.encoder_K = encoder_K
-		self.encoder_V = encoder_V
+		# ( batch_size x sequence_size x embed_size ) 
+		self.encoder_output = encoder_output
 
 
 	def forward(self, decoder_previous_output):
@@ -432,9 +433,11 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 		# ( batch_size x sequence_size x embed_size )
 		residual = decoder_previous_output
 
-		decoder_Q, _, _ = self.get_qkv(previous_output)
+		# Linear transfer both encoder results and previous steps result to get Q,K,V
+		decoder_Q, _, _ 		= self.get_qkv(previous_output)
+		_, encoder_K, encoder_V = self.get_qkv(self.encoder_output)
 
-		att_results = self.scaled_dot_attention(decoder_Q, self.encoder_K, self.encoder_V)  # out: [batch*heads, length_q,  depth_v]
+		att_results = self.scaled_dot_attention(decoder_Q, encoder_K, encoder_V)  # out: [batch*heads, length_q,  depth_v]
 
 		multi_att_concat = self.format_concat(att_results)
 
@@ -451,20 +454,18 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 # TODO mask
 class Decoder(nn.Module): 
 
-	def __init__(self, encoder_K: torch.Tensor, encoder_V: torch.Tensor, N_layers: int = 6):
+	def __init__(self, encoder_output: torch.Tensor, N_layers: int = 6):
 		super().__init__()
 
 
 		layers = []
 		for _ in range(N_layers): 
 			layers.append(Masked_MultiHeadedAttention())  #TODO masked
-			layers.append(Decoder_MultiHeadedAttention(encoder_K, encoder_V)) 
+			layers.append(Decoder_MultiHeadedAttention(encoder_output)) 
 			layers.append(FeedForward())
 
 		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
 		self.decoder_layers = nn.Sequential(*layers) 
-
-
 
 	def forward(self, prev_outputs): 
 
@@ -497,13 +498,13 @@ class Transformer(nn.Module):
 		self.word_embeddings = nn.Embedding(num_words, d_model)  
 		self.positional_encoding = positional_encodings(num_words, d_model)  #map values to sin function in paper
 
+		# Initialize and run encoder
 		self.encoder = Encoder()
+		input_embeddings =  self.get_input_encoder_embed(sequence_input)
+		encoder_output = Encoder(input_embeddings)
 
-		# Do a single pass through encoder stack 
-		encoder_K, encoder_V  self.get_output_QK()
-		
 		# Initialize encoder with output of stack 
-		self.decoder = Decoder(encoder_Q, encoder_K) 
+		self.decoder = Decoder(encoder_output) 
 
 
 		self.get_probabilites = nn.Sequential( [ 
@@ -516,23 +517,18 @@ class Transformer(nn.Module):
 		
 		
 	def get_output_QK(self, sequence_input): 
+		"""
+		in:
+			sequence of words
 
+		out:
+			Q, V transformed from output of encoder layers stack
+			size = ( batch_size x sequence_size x d_model )
+
+		"""
 		combined_output = self.encoder_forward(sequence_input)
 
-	def encoder_forward(self, sequence_input):
-		"""
-		Get output of encoder layers stack
-
-		"""
-
-		# torch.LongTensor
-		indexes: torch.LongTensor = input2idx(sequence_input)		
-		# Add positional encoding information
-		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
-
-		encoder_output = self.encoder(input_embedding)
-
-		return encoder_output
+		
 		
 	def forward(self, prev_outputs): 
 		"""
@@ -554,8 +550,27 @@ class Transformer(nn.Module):
 		return output_embeddings
 
 
+	def get_input_encoder_embed(self, sequence_input):
+		"""
+		in:
+			sequence of words
+
+		out:
+			output of encoder layers stack
+			size = ( batch_size x sequence_size x d_model )
+
+		"""
+		# TODO input2idx
+
+		# torch.LongTensor
+		indexes: torch.LongTensor = input2idx(sequence_input)		
+		# Add positional encoding information
+		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
+
+		return input_embedding
+
 		
-	def get_output_embed(self, output_probabilities): 
+	def get_output_decoder_embed(self, output_probabilities): 
 		"""
 		returns output-embeddings ready for input to decoder
 		"""
