@@ -405,7 +405,7 @@ class Masked_MultiHeadedAttention(MultiHeadedAttention):
 
 class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
 
-	def __init__(self,  encoder_Q, encoder_K):
+	def __init__(self, encoder_K, encoder_V):
 		"""
 		Child class of MultiHeaded Attention
 
@@ -414,8 +414,8 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 		super().__init__()
 		print(self.__class__)
 
-		self.encoder_Q = encoder_Q
-		self.decoder_K = encoder_K
+		self.encoder_K = encoder_K
+		self.encoder_V = encoder_V
 
 
 	def forward(self, decoder_previous_output):
@@ -432,9 +432,9 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 		# ( batch_size x sequence_size x embed_size )
 		residual = decoder_previous_output
 
-		_, _, V = self.get_qkv(previous_output)
+		decoder_Q, _, _ = self.get_qkv(previous_output)
 
-		att_results = self.scaled_dot_attention(self.encoder_Q, self.decoder_K, V)  # out: [batch*heads, length_q,  depth_v]
+		att_results = self.scaled_dot_attention(decoder_Q, self.encoder_K, self.encoder_V)  # out: [batch*heads, length_q,  depth_v]
 
 		multi_att_concat = self.format_concat(att_results)
 
@@ -451,14 +451,14 @@ class Decoder_MultiHeadedAttention(MultiHeadedAttention):
 # TODO mask
 class Decoder(nn.Module): 
 
-	def __init__(self, encoder_Q, encoder_K, N_layers: int = 6):
+	def __init__(self, encoder_K: torch.Tensor, encoder_V: torch.Tensor, N_layers: int = 6):
 		super().__init__()
 
 
 		layers = []
 		for _ in range(N_layers): 
 			layers.append(Masked_MultiHeadedAttention())  #TODO masked
-			layers.append(Decoder_MultiHeadedAttention(encoder_Q, encoder_K)) 
+			layers.append(Decoder_MultiHeadedAttention(encoder_K, encoder_V)) 
 			layers.append(FeedForward())
 
 		# layers = [ MultiHeadedAttention(), FeedForward() for _ in range(N_layer) ]
@@ -498,8 +498,10 @@ class Transformer(nn.Module):
 		self.positional_encoding = positional_encodings(num_words, d_model)  #map values to sin function in paper
 
 		self.encoder = Encoder()
+
 		# Do a single pass through encoder stack 
-		encoder_Q, encoder_K = self.get_output_QK()
+		encoder_K, encoder_V  self.get_output_QK()
+		
 		# Initialize encoder with output of stack 
 		self.decoder = Decoder(encoder_Q, encoder_K) 
 
