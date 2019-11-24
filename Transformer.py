@@ -473,7 +473,7 @@ class positional_encodings(nn.Module):
 		return torch.cos(pos / torch.pow(torch.Tensor([10000.0]), exp))
 
 class Decoder_MultiHeadedAttention(MultiHeadedAttention): 
-# TODO mask
+	# TODO mask
 
 	def __init__(self, encoder_output):
 		"""
@@ -597,12 +597,18 @@ class Decoder(nn.Module):
 class Transformer(nn.Module):
 
 	def __init__(self,  sequence_input,
+						vocab, 
 						embedding_size:int = 512, 
 						num_heads:int = 6, 
 						depth_qk: int = 64, 
 						depth_v: int = 64):
 		
 		super().__init__()
+
+
+		self.vocab = vocab
+		self.vocab_size = len(vocab)
+
 
 		# TODO see what values a needed where / adjust or remove initialize defautl values 
 		self.d_model =			embedding_size 		# Size of embeddings
@@ -613,8 +619,8 @@ class Transformer(nn.Module):
 		self.seq_len = len(sequence_input)
 
 		# Initiliaze embeddings and their look up table
-		self.word_embeddings = nn.Embedding(num_words, d_model)  
-		self.positional_encoding = positional_encodings(num_words, d_model)  #map values to sin function in paper
+		self.word_embeddings = nn.Embedding(self.vocab_size, self.d_model )  
+		self.positional_encoding = positional_encodings(self.vocab_size, self.d_model)  #map values to sin function in paper
 
 		# Initialize and run encoder
 		self.encoder = Encoder()
@@ -634,8 +640,7 @@ class Transformer(nn.Module):
 			])
 		
 		
-		
-	def forward(self, prev_outputs): 
+	def forward(self, prev_outputs, i): 
 		"""
 		In: 
 			Sequence_input: sentence 
@@ -655,6 +660,11 @@ class Transformer(nn.Module):
 		return output_embeddings
 
 
+	def input2idx(self, input_sequence):
+
+		return torch.LongTensor([self.vocab[word] for word in input_sequence ])
+		
+
 	def get_input_encoder_embed(self, sequence_input):
 		"""
 		in:
@@ -665,14 +675,22 @@ class Transformer(nn.Module):
 			size = ( batch_size x sequence_size x d_model )
 
 		"""
-		# TODO input2idx
 
 		# torch.LongTensor
-		indexes: torch.LongTensor = input2idx(sequence_input)		
+		indexes: torch.LongTensor = self.input2idx(sequence_input)		
 		# Add positional encoding information
 		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
 
 		return input_embedding
+
+
+	def get_right_shfted(self, output_embed):
+
+		output_embed[1:] = output_embed[:-1]
+		output_embed[0] = 0
+
+		return output_embed
+
 
 		
 	def get_output_decoder_embed(self, output_probabilities): 
@@ -683,8 +701,7 @@ class Transformer(nn.Module):
 		# TODO word to index look up input2idx(input) for output_probs / other language 
 
 		# shift max to right
-
-		decoder_input = self.get_
+		decoder_input = self.get_right_shfted(decoder_embeds)
 
 		# torch.LongTensor
 		indexes: torch.LongTensor = input2idx(sequence_input)
@@ -698,34 +715,4 @@ class Transformer(nn.Module):
 		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
 		return input_embedding
 
-
-
-
-
-	# def get_input_embed(self, sequence_input, use_same_input: bool = True): 
-	# 	"""
-	# 	output input embeddings ready for encoder
-	# 	"""
-		
-	# 	# TODO word to index look up input2idx(input) 
-	# 	if use_same_input:
-			
-	# 		if self.input_embeddings == None: 
-
-	# 			# torch.LongTensor
-	# 			indexes: torch.LongTensor = input2idx(sequence_input)
-
-	# 			# Add positional encoding information
-	# 			self.input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
-			
-	# 		return self.input_embedding
-
-	# 	else: 
-	# 		# torch.LongTensor
-	# 		indexes: torch.LongTensor = input2idx(sequence_input)
-
-	# 		# Add positional encoding information
-	# 		input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
-
-	# 		return input_embedding
 	
