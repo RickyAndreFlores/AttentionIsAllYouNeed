@@ -1,7 +1,8 @@
 from Transformer import Transformer
-import torch.nn as 
+import torch.nn as nn
 
 
+# TODO complete
 def train(): 
 
     vocab = {"hi":0, "my":1, "name":2, "is": 3}
@@ -25,5 +26,5 @@ def loss(criterion, output_embeddings, target, num_pred):
     
 
     loss = criterion(output_embeddings, target) 
-    
+
     
