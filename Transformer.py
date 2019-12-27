@@ -2,198 +2,150 @@ import torch
 from torch import nn
 from math import sqrt
 from helper import TensorInfo
-
+from dataclasses import dataclass
+from EncoderDecoder import Encoder, Decoder
+from PositionsMasks import Mask, Pad_Mask, Positional_Encodings
  
-
-class Positional_Encodings(nn.Module):
-
-	def __init__(self, num_words: int, d_model: int = 512):
-		
-		super().__init__()
-
-		self.num_words = num_words
-		self.d_model = d_model
-
-		# generate table
-		positional_encoding_values: torch.FloatTensor = self.get_pos_values()
-
-		# make look up table
-		self.positional_encoding_lookup = nn.Embedding.from_pretrained(positional_encoding_values, freeze=True)
-
-	@TensorInfo.show__tensor_sizes
-	def forward(self, indexes: torch.LongTensor): 
-		"""
-
-		// from pytorch docs 
-		Input: (*), LongTensor of arbitrary shape containing the indices to extract
-
-		Output: (*, H) , where * is the input shape and H=embedding_dim
-
-
-		"""
-		return self.positional_encoding_lookup(indexes)
-
-	def get_pos_values(self): 
-		"""
-		out:(n_positions x d_model)
-			where each value in the even (2*i)   columns is encoded with it's respective PE_sin(row,col) value
-			where each value in the odds (2*i+1) columns is encoded with it's respective PE_cos(row,col) value
-
-		"""
-		
-		#shape (n_positions x d_model)
-		encodings: torch.float = torch.randn(self.num_words, self.d_model)
-
-		num_i = self.d_model // 2
-
-		# for every word position
-		for pos in range(self.num_words): 
-			# iterate through every 2 columns 
-			for i in range(num_i):
-				encodings[pos][2*i]     = self.pe_sin(pos, 2*i)   		# evens
-				encodings[pos][2*i + 1] = self.pe_cos(pos, 2*i + 1)		# odds
-
-			# if odd
-			if self.d_model % 2 == 1:
-				# get last collumn 
-				encodings[pos][-1]     = self.pe_sin(pos, num_i)
-
-		return encodings
-
-	def pe_sin(self, pos, col): 
-		# col = 2i = even col 
-		exp = col / self.d_model
-		return torch.sin(pos / torch.pow(torch.Tensor([10000.0]), exp))
-
-	def pe_cos(self, pos, col): 
-		# col = 2i + 1 = odd col 
-		exp = col / self.d_model
-		return torch.cos(pos / torch.pow(torch.Tensor([10000.0]), exp))
-
-
-# TODO mask
-# TODO finish transformer
+# TODO make compatabile with batch second
 class Transformer(nn.Module):
 
-	def __init__(self,  sequence_input,
-						vocab, 
+	def __init__(self,	source_vocab_len, 
+						target_vocab_len,
+						str_to_index,
+						index_to_str, 
 						embedding_size:int = 512, 
 						num_heads:int = 6, 
 						depth_qk: int = 64, 
-						depth_v: int = 64):
+						depth_v: int = 64, 
+						device = torch.device('cuda')):
 		
 		super().__init__()
-
-
-		self.vocab = vocab
-		self.vocab_size = len(vocab)
 
 		# TODO see what values a needed where / adjust or remove initialize defautl values 
 		self.d_model =			embedding_size 		
 		self.num_heads = 		num_heads
 		self.depth_qk = 		depth_qk
 		self.depth_v = 		    depth_v
-
-		self.seq_len = len(sequence_input)
+		self.device = 			device
 
 		# Initiliaze embeddings and their look up table
-		self.word_embeddings_lookup = nn.Embedding(self.vocab_size, self.d_model )  
-		self.positional_encodings_lookup = Positional_Encodings(self.vocab_size, self.d_model)  #map values to sin function in paper
+		self.src_embeddings_lookup 	  = nn.Embedding(source_vocab_len, self.d_model).to(self.device)
+		self.target_embeddings_lookup = nn.Embedding(target_vocab_len, self.d_model).to(self.device)
 
-		self.decoder = self.setupDecoder(sequence_input)
+		self.str_to_index  = str_to_index
+		self.index_to_str  = index_to_str
 
-		self.get_probabilites = nn.Sequential( [ 
-			# in:( batch_size x sequence_size x embed_size )
-			# out:( batch_size x sequence_size x 1 )
-			nn.Linear(d_model, 1), 
-			# softmax over sequence -- need to remember/recheck TODO
-			nn.Softmax(dim=1) 
-			])
+		# self.start = {'src': str_to_index.src['<sos>'], 'target':  str_to_index.target['<sos>'] }
+		self.end   = {'src': str_to_index.src['<eos>'], 'target':  str_to_index.target['<eos>'] }
+
+		self.mask = Mask(device=self.device).to(self.device)
+		self.pad_mask = Pad_Mask(self.str_to_index, self.d_model, device=self.device).to(self.device)
+
+		# test
+		self.encoder = Encoder(N_layers=3).to(self.device)
+		self.decoder = Decoder(N_layers=3).to(self.device)
+
+		# in:( batch_size x sequence_size x embed_size ) ->out:( batch_size x sequence_size x target_vocab_len )
+		self.linear_to_vocab_dim = nn.Linear(embedding_size, target_vocab_len).to(self.device)
+
+		self.positional_encodings = Positional_Encodings(self.d_model, self.device).to(self.device)
 		
-	def forward(self, prev_outputs, mask): 
+			
+	@TensorInfo.show__tensor_sizes
+	def forward(self, src_sequences: torch.Tensor, target_sequences: torch.Tensor): 
 		"""
 		In: 
-			prev_output: output embeddings based on previous step's decoder output probabilites 
+
+			sequence_idx_input: batch of sequences to be translated as their indicies within the vocab
+				["Hello", "world"] -> [4, 2]
+
+				shape :  (batch x seq_length)
 
 		"""
 
-		# Takes in encoder outputs to extract Q, K and prev_output = (output_embeddings + positional)
-		decoder_output = self.decoder(prev_outputs, mask)
+		# self.get_size_data(src_sequences, target_sequences)
 
-		# TODO might integrate this function with decoder
-		output_embeddings = self.get_output_embed(output_probabilities)
+		self.src_positional, self.target_positional = self.positional_encodings(src_sequences, target_sequences, 'both')
 
 
-		return output_embeddings
+		# mask everything besides first position (<sos>)
+		self.mask.reset()
 
-	def predict_next_word(self,  prev_outputs, mask): 
+		encoder_input_embeddings = self.get_input_embeddings(src_sequences, 'src')
+		encoder_output_embeddings = self.encoder(encoder_input_embeddings) 					# out: batch_size, seq, embedding_size
 
-		# Takes in encoder outputs to extract Q, K and prev_output = (output_embeddings + positional)
-		decoder_output = self.decoder(prev_outputs, mask)
+		# mask everything except <sos> token embedding on first iteration
+		# Mask will hide all words, target sequence can be replaced random tensor so long as each sequence starts with '<sos>'
+		predicted_sequences = target_sequences
 
-		# TODO might integrate this function with decoder
-		output_embeddings = self.get_output_embed(output_probabilities)
-
-	
-	def runEncoder(self, input_embeddings):
-		self.encoder = Encoder()
-		encoder_output = Encoder(input_embeddings)
-
-		return encoder_output
-
-	def setupDecoder(self, sequence_input): 
-
-		# Initialize and run encoder
-		input_embeddings =  self.get_encoder_inputs(sequence_input)
-		encoder_output = self.runEncoder(input_embeddings)
-
-		# Initialize encoder with output of encoder layers stack 
-		return Decoder(encoder_output) 
-
-	def get_encoder_inputs(self, sequence_input):
-		"""
-		in:
-			sequence of words
-
-		out:
-			output of encoder layers stack
-			size = ( batch_size x sequence_size x d_model )
-
-		"""
-
-		# torch.LongTensor
-		indexes: torch.LongTensor = self.input2idx(sequence_input)		
-		# Add positional encoding information
-		input_embedding = self.word_embeddings_lookup(indexes) + self.positional_encodings_lookup(indexes)
-
-		return input_embedding
-
-	def get_right_shfted(self, output_embed):
-
-		output_embed[1:] = output_embed[:-1]
-		output_embed[0] = 0
-
-		return output_embed
-	
-	def get_decoder_inputs(self, output_probabilities): 
-		"""
-		returns output-embeddings ready for input to decoder
-		"""
 		
-		# TODO word to index look up input2idx(input) for output_probs / other language 
+		while self.mask.finished == False:
+				
+			# mask everything except <sos> token embedding on first iteration
+			decoder_input_embeddings =  self.get_input_embeddings(predicted_sequences, 'target')
+			decoder_output 	= self.decoder(decoder_input_embeddings, encoder_output_embeddings) 	# out: batch_size, seq, embedding_size
 
-		# shift max to right
-		decoder_input = self.get_right_shfted(decoder_embeds)
+			# Turn decoder output into target vocab rankings
+			predicted_rankings  = self.linear_to_vocab_dim(decoder_output) 		# out-size: batch_size, seq, target_vocab_len
 
-		# torch.LongTensor
-		indexes: torch.LongTensor = input2idx(sequence_input)
-		# Add positional encoding information
-		self.input_embedding = self.word_embeddings(indexes) + self.positional_encoding(indexes)
-	
-		return input_embedding
+			# self.print_translated_text(predicted_rankings, target_sequences)
 
-	
-	def input2idx(self, input_sequence):
+		self.print_translated_text(predicted_rankings, target_sequences)
 
-		return torch.LongTensor([self.vocab[word] for word in input_sequence ])
+		perumted_predictions = predicted_rankings.permute(0,2,1) # out-size: batch_size, target_vocab_len, seq
 		
+		return perumted_predictions
+
+	def get_input_embeddings(self, sequences_indicies, src_or_target: str):
+		"""
+
+			get embeddings from sequence indicies, and mask future and padded values if necessary
+
+			sequences_indicies:  (batch x sequence_length)
+			src_or_target:		 "src" or "target"
+
+		"""
+
+
+		if src_or_target == 'target':
+			# add positional information out: batch_size, seq, embedding_size
+			input_embeddings_with_positions = self.target_embeddings_lookup(sequences_indicies) + self.target_positional
+
+			# mask everything except <sos> token embedding on first iteration
+			masked_input_embeddings_with_pos_enc = self.mask( input_embeddings_with_positions)
+
+		else:
+			
+			# add positional information out: batch_size, seq, embedding_size
+			masked_input_embeddings_with_pos_enc = self.src_embeddings_lookup(sequences_indicies) + self.src_positional
+
+
+		padded_masked_input_embeddings = self.pad_mask(masked_input_embeddings_with_pos_enc, sequences_indicies, src_or_target).type(torch.FloatTensor).to(self.device)
+
+		
+		return padded_masked_input_embeddings
+	
+
+   
+	def print_translated_text(self, predicted_rankings, true_sequences, num_printed=3):
+
+		# choose highest ranking word as output
+		predicted_sequences = predicted_rankings.argmax(dim=-1)    		# out-size: batch_size, seq 
+
+		for seq_i, sequence in enumerate(predicted_sequences):
+			
+			if seq_i >= num_printed: 
+				break
+
+			print("\nTranslated text:")
+
+			for word_index in predicted_sequences[seq_i]: 
+				print('', self.index_to_str.target[word_index], end=" ")
+
+			print("\nTrue text:")
+
+			for true_index in true_sequences[seq_i]: 
+				print('', self.index_to_str.target[true_index], end=" ")
+
+		
+		print()
