@@ -10,7 +10,6 @@ PATH = os.environ['ATT_PATH']
 def print_params(model_state):
 	for param in model_state:
 		print(param)
-git ad
 
 def train():
 
