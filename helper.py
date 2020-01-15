@@ -66,3 +66,28 @@ class TensorInfo():
 			return result 
 		
 		return wrapper
+
+
+		@TensorInfo
+		def print_translated_text(self, predicted_rankings, true_sequences, num_printed=3):
+
+			# choose highest ranking word as output
+			predicted_sequences = predicted_rankings.argmax(dim=-1)    		# out-size: batch_size, seq 
+
+			for seq_i, sequence in enumerate(predicted_sequences):
+				
+				if seq_i >= num_printed: 
+					break
+
+				print("\nTranslated text:")
+
+				for word_index in predicted_sequences[seq_i]: 
+					print('', self.index_to_str.target[word_index], end=" ")
+
+				print("\nTrue text:")
+
+				for true_index in true_sequences[seq_i]: 
+					print('', self.index_to_str.target[true_index], end=" ")
+
+			
+			print()

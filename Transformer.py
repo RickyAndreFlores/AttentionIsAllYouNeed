@@ -42,8 +42,8 @@ class Transformer(nn.Module):
 		self.pad_mask = Pad_Mask(self.str_to_index, self.d_model, device=self.device).to(self.device)
 
 		# test
-		self.encoder = Encoder(N_layers=3).to(self.device)
-		self.decoder = Decoder(N_layers=3).to(self.device)
+		self.encoder = Encoder(N_layers=5).to(self.device)
+		self.decoder = Decoder(N_layers=5).to(self.device)
 
 		# in:( batch_size x sequence_size x embed_size ) ->out:( batch_size x sequence_size x target_vocab_len )
 		self.linear_to_vocab_dim = nn.Linear(embedding_size, target_vocab_len).to(self.device)
@@ -86,15 +86,11 @@ class Transformer(nn.Module):
 			decoder_output 	= self.decoder(decoder_input_embeddings, encoder_output_embeddings) 	# out: batch_size, seq, embedding_size
 
 			# Turn decoder output into target vocab rankings
-			predicted_rankings  = self.linear_to_vocab_dim(decoder_output) 		# out-size: batch_size, seq, target_vocab_len
-
-			# self.print_translated_text(predicted_rankings, target_sequences)
+			predicted_rankings  = self.linear_to_vocab_dim(decoder_output) 	# out-size: batch_size, seq, target_vocab_len
 
 		self.print_translated_text(predicted_rankings, target_sequences)
-
-		perumted_predictions = predicted_rankings.permute(0,2,1) # out-size: batch_size, target_vocab_len, seq
 		
-		return perumted_predictions
+		return predicted_rankings
 
 	def get_input_embeddings(self, sequences_indicies, src_or_target: str):
 		"""
@@ -126,9 +122,14 @@ class Transformer(nn.Module):
 		return padded_masked_input_embeddings
 	
 
-   
+	#TODO move to helper
 	def print_translated_text(self, predicted_rankings, true_sequences, num_printed=3):
 
+		
+		# Unnecessary but reflect what the loss function is doing
+		logsoft = nn.LogSoftmax(dim=-1)
+		predicted_rankings = logsoft(predicted_rankings)
+		
 		# choose highest ranking word as output
 		predicted_sequences = predicted_rankings.argmax(dim=-1)    		# out-size: batch_size, seq 
 

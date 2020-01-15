@@ -3,24 +3,25 @@ from Dataset import Dataset
 import torch.nn as nn
 import torch
 import os
+import math
 
 PATH = os.environ['ATT_PATH']
 
-	
 def print_params(model_state):
 	for param in model_state:
 		print(param)
+git ad
 
 def train():
 
 	# Following the original papers hyperparameters
 	betas = (0.90 , 0.98)
-	num_epochs = 1000
+	num_epochs = 10
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 	print("Loading dataset...")
-	dataset = Dataset(device=device, batch_size=200)
+	dataset = Dataset(device=device, batch_size=10)
 	print("dataset loaded")
 
 
@@ -41,41 +42,35 @@ def train():
 				del load_dict['positional_encodings.src_pos_enc_lookup.weight']
 			except KeyError:
 				print('no need to delete')
-			# load_dict['linear_to_vocab_dim.weight'] = load_dict['get_probabilites.0.weight']
-			# load_dict['linear_to_vocab_dim.bias']   = load_dict['get_probabilites.0.bias']
-			# del load_dict['get_probabilites.0.weight']
-			# del load_dict['get_probabilites.0.bias']
-			
+	
 			transformer.load_state_dict(load_dict)
 	
-			torch.save(transformer.state_dict(), PATH  + "model_save.pt")
-
 			print("Model loaded")
 
 	except FileNotFoundError: 
 		print("File not found error, continue blank slate")
 
 
-	optimizer = torch.optim.Adam(transformer.parameters(), betas=betas)	
-	# TODO :  update learning rate according to funtion in paper
-	# scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer)
+	optimizer = torch.optim.Adam(transformer.parameters(), betas=betas, lr=1.5)
 
 	train_steps_per_epoch = dataset.steps_per_epoch["train"]
-	scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr= 8.0, steps_per_epoch= train_steps_per_epoch, epochs=num_epochs)
 
+	total_steps = train_steps_per_epoch * num_epochs
+	ramp_up_steps = 30
+	ramp_up_percentage =  ramp_up_steps / total_steps 
 
-	loss_fn = nn.CrossEntropyLoss()
+	scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1.45, total_steps=2000, pct_start=ramp_up_percentage)
+
+	loss_fn = nn.CrossEntropyLoss(reduction='sum').to(device=device)
 	loss = 0 
 
 	loss_values = []
-	# values_epoch = []
-
 	update_step = 1
 
-	# TODO update graph.png
+
 	for e in range(num_epochs):
 
-		print("Begin epoch", e)
+		print("-----------Begin epoch", e)
 
 		for i, batch in enumerate(dataset.train_iterator):
 
@@ -83,81 +78,45 @@ def train():
 			src_sequences    = batch.src.permute(1,0)
 			target_sequences = batch.trg.permute(1,0)
 
-			optimizer.zero_grad()
 
+			
 			print("batch",i, "Epoch", e)
-			#  (batch_size, target_vocab_len, seq), 
-			perumted_predictions = transformer(src_sequences, target_sequences)
-			loss += loss_fn(perumted_predictions, target_sequences)
 
+			optimizer.zero_grad()
+		
+			#  (batch_size, target_vocab_len, seq), 
+			predicted_rankings = transformer(src_sequences, target_sequences)
+			perumted_predictions = predicted_rankings.permute(0,2,1) # out-size: batch_size, target_vocab_len, seq
+		
+			loss = loss_fn(perumted_predictions, target_sequences)
+
+			print( "learning rate = ", scheduler.get_lr() )
 			print("Loss = ", str(float(loss)) + "\n")
 
-			if  i %  1  == 0:
-
-				training_step =  e*train_steps_per_epoch + i
-
-				# add to record of loss
-				loss_values.append([training_step, float(loss)] )
-
-
-			if i % 20 == 0: 
-				torch.save(transformer.state_dict(), PATH  + "model_save.pt")
 			
+			# save model
+			if i % 50 == 0: 
+				torch.save(transformer.state_dict(), PATH  + "model_save.pt")
+
+				print("saved model")
 				with open( PATH + "values.txt", "w") as list_file: 
 					list_file.write(str(loss_values))
 	
-			# update weights every int(update_step)s iterartions
-			if i % 1 == 0: 
+				
 
-				loss.backward()
-				# scheduler.step()
-				# print("scheduler")
-				optimizer.step()
+			loss.backward()
 
-				loss = 0 
+			optimizer.step()
+
+			scheduler.step()
 
 
-		scheduler.step()
-
-		# values_epoch.append([e, loss] )
 		
-		# if e % 1 == 0: 
-		# 	torch.save(transformer.state_dict(), PATH  + "model_save.pt")
-
-		# 	with open( PATH + "values_epoch.txt", "w") as list_file: 
-		# 		list_file.write(str(values_epoch))
-
 train()
 
 
-
-
-def filter_no_grad(model_state): 
-	
-	for param in model_state:
-		print(param.requires_grad)
-
-	
-
-def visualize(i, loss):
-
+# TODO implement beam search
+def beam_search():
 	pass
 
 
-
-
-
-
-# TODO make sure this implementation is correct
-def learning_rate(d_model, step_num, warmup_steps=4000):
-
-	learning_rate = d_model**(-0.5) * min(step_num**(-0.5) , step_num*warmup_steps**(-1.5))  
-
-	return learning_rate
-
-
-# TODO complete
-def eval(): 
-	pass
-
-	
