@@ -1,4 +1,11 @@
 # AttentionIsAllYouNeed
-Implementation of the Attention is All you Need Transformer
+Implementation of the Attention is All you Need Transformer as described  
+<a href="https://arxiv.org/pdf/1706.03762.pdf"> here </a>
 
-Re-implmentng this from scratch, in progress
+
+
+Graph of network <a href="./graph.png"> </a>
+
+
+
+
