@@ -4,7 +4,7 @@ Implementation of the Attention is All you Need Transformer as described
 
 
 
-Graph of network <a href="./graph.png"> </a>
+Graph of network <a href="graph.png"> </a>
 
 
 
